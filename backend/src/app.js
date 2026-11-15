@@ -41,7 +41,7 @@ app.get('/api/health', async (req, res) => {
       await connectDB();
       database = mongoose.connection.readyState === 1 ? 'conectado' : 'desconectado';
     } catch (err) {
-      database = 'erro de conexão (verifique MONGODB_URI e o Network Access do Atlas)';
+      database = 'erro de conexão: ' + scrub(err.message);
     }
   }
   res.json({
@@ -60,19 +60,23 @@ mongoose.set('bufferCommands', false);
 
 let connecting = null;
 let lastFailure = 0;
+let lastErrorMessage = '';
 const RETRY_AFTER_MS = 30 * 1000;
+
+// Remove usuário/senha de qualquer texto antes de exibir ou registrar
+const scrub = (msg) => String(msg || '').replace(/mongodb(\+srv)?:\/\/[^@\s]+@/gi, 'mongodb$1://***@');
 
 async function connectDB() {
   if (mongoose.connection.readyState === 1 || !process.env.MONGODB_URI) return;
   // Se falhou há pouco, não trava cada requisição esperando de novo
   if (lastFailure && Date.now() - lastFailure < RETRY_AFTER_MS) {
-    throw new Error('MongoDB indisponível (nova tentativa em instantes)');
+    throw new Error(lastErrorMessage || 'MongoDB indisponível (nova tentativa em instantes)');
   }
   if (!connecting) {
     connecting = mongoose
       .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 8000 })
       .then(() => { lastFailure = 0; console.log('✅ MongoDB conectado!'); })
-      .catch(err => { lastFailure = Date.now(); throw err; })
+      .catch(err => { lastFailure = Date.now(); lastErrorMessage = scrub(err.message); throw err; })
       .finally(() => { connecting = null; });
   }
   await connecting;
@@ -84,7 +88,7 @@ app.use('/api', async (req, res, next) => {
   try {
     await connectDB();
   } catch (err) {
-    console.error('❌ Erro MongoDB:', err.message);
+    console.error('❌ Erro MongoDB:', scrub(err.message));
     // segue sem banco: a verificação funciona, login/histórico não
   }
   next();
